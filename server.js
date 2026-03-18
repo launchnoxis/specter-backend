@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const scanRoute = require('./routes/scan');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -20,6 +21,40 @@ const limiter = rateLimit({ windowMs: 60 * 1000, max: 30 });
 app.use('/api/', limiter);
 
 app.use('/api', scanRoute);
+
+// Pro payment notification
+app.post('/api/pro-payment', async (req, res) => {
+  try {
+    const { wallet, signature, email } = req.body;
+    console.log(`[pro] Payment received! Wallet: ${wallet} | Sig: ${signature} | Email: ${email}`);
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: process.env.GMAIL_USER,
+      to: 'shivammehta713@gmail.com',
+      subject: '💰 New Specter Pro Payment!',
+      html: `
+        <h2>New Pro Subscription Payment</h2>
+        <p><strong>Wallet:</strong> ${wallet}</p>
+        <p><strong>Transaction:</strong> <a href="https://solscan.io/tx/${signature}">${signature}</a></p>
+        <p><strong>Email:</strong> ${email || 'Not provided'}</p>
+        <p>Activate their Pro access manually.</p>
+      `,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[pro-payment]', err.message);
+    res.json({ success: false }); // Don't fail silently on user end
+  }
+});
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use((err, req, res, next) => {

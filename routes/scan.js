@@ -396,13 +396,13 @@ router.get('/scan/:address', async (req, res, next) => {
       marketCapK = mc >= 1_000_000 ? `$${(mc/1_000_000).toFixed(2)}M` : mc >= 1000 ? `$${(mc/1000).toFixed(1)}K` : `$${mc.toFixed(0)}`;
     }
 
-    // Three features + holder count in parallel
-    const [rugHistory, sellPressure, washTrading, onChainHolderCount] = await Promise.all([
-      getCreatorHistory(creator),
+    // Features + holder count in parallel
+    const [sellPressure, washTrading, onChainHolderCount] = await Promise.all([
       getSellPressure(address),
       getWashTrading(address),
       getRealHolderCount(address),
     ]);
+    const rugHistory = null; // Replaced by creator profile link
 
     // Holder count — use on-chain count, fallback to dex
     const realHolderCount = onChainHolderCount || dexData?.info?.holder || holders.length;
@@ -411,13 +411,13 @@ router.get('/scan/:address', async (req, res, next) => {
       mintRenounced, freezeRenounced, devHoldingPct, topHolderPct,
       top10Combined, whaleHolders,
       holderCount: realHolderCount, tokenAge,
-      rugHistory, washPct: washTrading?.washPct || 0,
+      washPct: washTrading?.washPct || 0,
     });
 
     const result = {
       riskScore,
       riskReasons: reasons,
-      token: { name, symbol, address, image },
+      token: { name, symbol, address, image, creator },
       checks: {
         mintRenounced,
         mintDetail: mintRenounced ? 'No new tokens can ever be created. Supply is permanently fixed.' : 'The developer can mint unlimited new tokens at any time.',
@@ -443,7 +443,6 @@ router.get('/scan/:address', async (req, res, next) => {
         holders: realHolderCount,
         solRaised: isGraduated ? '85+ (Graduated)' : `${solRaisedNum.toFixed(2)} SOL`,
       },
-      rugHistory,
       sellPressure,
       washTrading,
     };

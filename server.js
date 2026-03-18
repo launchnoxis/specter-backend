@@ -4,7 +4,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const scanRoute = require('./routes/scan');
-const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -26,33 +25,32 @@ app.use('/api', scanRoute);
 app.post('/api/pro-payment', async (req, res) => {
   try {
     const { wallet, signature, email } = req.body;
-    console.log(`[pro] Payment received! Wallet: ${wallet} | Sig: ${signature} | Email: ${email}`);
+    console.log(`[pro] Payment! Wallet: ${wallet} | Sig: ${signature} | Email: ${email}`);
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS,
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
       },
-    });
-
-    await transporter.sendMail({
-      from: process.env.GMAIL_USER,
-      to: 'shivammehta713@gmail.com',
-      subject: '💰 New Specter Pro Payment!',
-      html: `
-        <h2>New Pro Subscription Payment</h2>
-        <p><strong>Wallet:</strong> ${wallet}</p>
-        <p><strong>Transaction:</strong> <a href="https://solscan.io/tx/${signature}">${signature}</a></p>
-        <p><strong>Email:</strong> ${email || 'Not provided'}</p>
-        <p>Activate their Pro access manually.</p>
-      `,
+      body: JSON.stringify({
+        from: 'Specter <onboarding@resend.dev>',
+        to: 'shivammehta713@gmail.com',
+        subject: '💰 New Specter Pro Payment!',
+        html: `
+          <h2>New Pro Subscription Payment</h2>
+          <p><strong>Wallet:</strong> ${wallet}</p>
+          <p><strong>Transaction:</strong> <a href="https://solscan.io/tx/${signature}">${signature}</a></p>
+          <p><strong>Email:</strong> ${email || 'Not provided'}</p>
+          <p>Activate their Pro access manually.</p>
+        `,
+      }),
     });
 
     res.json({ success: true });
   } catch (err) {
     console.error('[pro-payment]', err.message);
-    res.json({ success: false }); // Don't fail silently on user end
+    res.json({ success: false });
   }
 });
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

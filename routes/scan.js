@@ -384,3 +384,32 @@ router.get('/scan/:address', async (req, res, next) => {
 
 router.get('/scans-left', (req, res) => res.json({ scansLeft: 5 }));
 module.exports = router;
+
+// Debug endpoint — see raw API responses for a token
+router.get('/debug/:address', async (req, res) => {
+  const { address } = req.params;
+  const result = {};
+  
+  try {
+    const r = await axios.get(`https://frontend-api.pump.fun/coins/${address}`, { timeout: 8000 });
+    result.pumpFun = { status: r.status, complete: r.data?.complete, real_sol_reserves: r.data?.real_sol_reserves, virtual_sol_reserves: r.data?.virtual_sol_reserves, raydium_pool: r.data?.raydium_pool, created_timestamp: r.data?.created_timestamp, holder_count: r.data?.holder_count, creator: r.data?.creator, bonding_curve: r.data?.bonding_curve };
+  } catch(e) { result.pumpFun = { error: e.message }; }
+
+  try {
+    const r = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeout: 8000 });
+    const pair = r.data?.pairs?.[0];
+    result.dexScreener = { dexId: pair?.dexId, pairCreatedAt: pair?.pairCreatedAt, marketCap: pair?.marketCap, liquidity: pair?.liquidity, holders: pair?.info?.holder };
+  } catch(e) { result.dexScreener = { error: e.message }; }
+
+  try {
+    const r = await axios.get(`https://frontend-api.pump.fun/trades/latest/${address}?limit=10&minimumSize=0`, { timeout: 8000 });
+    result.trades = { count: Array.isArray(r.data) ? r.data.length : 0, sample: Array.isArray(r.data) ? r.data[0] : null };
+  } catch(e) { result.trades = { error: e.message }; }
+
+  try {
+    const r = await axios.get(`https://frontend-api.pump.fun/coins/user-created-coins/${result.pumpFun?.creator}?offset=0&limit=5`, { timeout: 8000 });
+    result.creatorHistory = { count: Array.isArray(r.data) ? r.data.length : 0 };
+  } catch(e) { result.creatorHistory = { error: e.message }; }
+
+  res.json(result);
+});

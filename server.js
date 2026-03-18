@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8080;
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
-  origin: [process.env.FRONTEND_URL, /\.vercel\.app$/, 'http://localhost:5174'],
+  origin: [process.env.FRONTEND_URL, 'https://specter-henna.vercel.app', /\.vercel\.app$/, 'http://localhost:5174'],
   methods: ['GET', 'POST'],
 }));
 app.use(express.json());

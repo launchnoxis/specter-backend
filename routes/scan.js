@@ -55,13 +55,45 @@ router.get('/scan/:address', async (req, res, next) => {
     const cached = getCache(address);
     if (cached) return res.json(cached);
 
-    // 1. Fetch pump.fun token data
+    // 1. Fetch pump.fun token data - try multiple endpoints
     let pumpData = null;
     try {
       const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${address}`, { timeout: 8000 });
       pumpData = pumpRes.data;
     } catch (e) {
-      console.warn('[scan] pump.fun API failed:', e.message);
+      console.warn('[scan] pump.fun frontend API failed:', e.message);
+    }
+
+    // Fallback to pump.fun API v2
+    if (!pumpData || !pumpData.name) {
+      try {
+        const pumpRes2 = await axios.get(`https://client-api-2-74b1891ee9f9.herokuapp.com/coins/${address}`, { timeout: 8000 });
+        pumpData = pumpRes2.data;
+      } catch (e) {
+        console.warn('[scan] pump.fun client API failed:', e.message);
+      }
+    }
+
+    // Fallback to DexScreener for token info
+    if (!pumpData || !pumpData.name) {
+      try {
+        const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeout: 8000 });
+        const pair = dexRes.data?.pairs?.[0];
+        if (pair) {
+          pumpData = {
+            name: pair.baseToken?.name,
+            symbol: pair.baseToken?.symbol,
+            image_uri: pair.info?.imageUrl,
+            usd_market_cap: parseFloat(pair.marketCap || 0),
+            created_timestamp: pair.pairCreatedAt ? pair.pairCreatedAt / 1000 : null,
+            virtual_sol_reserves: 0,
+            creator: null,
+            description: '',
+          };
+        }
+      } catch (e) {
+        console.warn('[scan] DexScreener failed:', e.message);
+      }
     }
 
     // 2. Fetch token mint info from Solana

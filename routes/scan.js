@@ -35,16 +35,28 @@ const EXCLUDED_ADDRESSES = new Set([
   '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
 ]);
 
-function calcRiskScore({ mintRenounced, freezeRenounced, devHoldingPct, topHolderPct, holderCount, tokenAge, rugHistory, washPct }) {
+function calcRiskScore({ mintRenounced, freezeRenounced, devHoldingPct, topHolderPct, top10Combined, holderCount, tokenAge, rugHistory, washPct, whaleHolders }) {
   let score = 0, reasons = [];
   if (!mintRenounced) { score += 25; reasons.push('Mint authority not renounced — supply can be inflated'); }
   if (!freezeRenounced) { score += 15; reasons.push('Freeze authority not renounced — wallets can be frozen'); }
   if (devHoldingPct > 20) { score += 30; reasons.push(`Dev holds ${devHoldingPct.toFixed(1)}% — very high dump risk`); }
   else if (devHoldingPct > 10) { score += 15; reasons.push(`Dev holds ${devHoldingPct.toFixed(1)}% — elevated dump risk`); }
   else if (devHoldingPct > 5) { score += 8; reasons.push(`Dev holds ${devHoldingPct.toFixed(1)}% — moderate allocation`); }
-  if (topHolderPct > 25) { score += 20; reasons.push(`Top holder owns ${topHolderPct.toFixed(1)}% — extreme concentration`); }
-  else if (topHolderPct > 15) { score += 12; reasons.push(`Top holder owns ${topHolderPct.toFixed(1)}% — high concentration`); }
-  else if (topHolderPct > 8) { score += 5; reasons.push(`Top holder owns ${topHolderPct.toFixed(1)}% — moderate concentration`); }
+
+  // Top 10 combined concentration
+  if (top10Combined > 30) { score += 20; reasons.push(`Top 10 holders control ${top10Combined.toFixed(1)}% — extremely concentrated supply`); }
+  else if (top10Combined > 15) { score += 12; reasons.push(`Top 10 holders control ${top10Combined.toFixed(1)}% — high concentration, dump risk`); }
+  else if (top10Combined > 10) { score += 5; reasons.push(`Top 10 holders control ${top10Combined.toFixed(1)}% — moderate concentration`); }
+
+  // Single holder concentration
+  if (topHolderPct > 10) { score += 15; reasons.push(`Largest holder owns ${topHolderPct.toFixed(1)}% — extreme single-wallet risk`); }
+  else if (topHolderPct > 5) { score += 10; reasons.push(`Largest holder owns ${topHolderPct.toFixed(1)}% — high single-wallet concentration`); }
+  else if (topHolderPct > 3.5) { score += 5; reasons.push(`Largest holder owns ${topHolderPct.toFixed(1)}% — above safe threshold`); }
+
+  // Whale wallets (any single holder > 3.5%)
+  if (whaleHolders > 3) { score += 10; reasons.push(`${whaleHolders} wallets each hold over 3.5% — coordinated dump risk`); }
+  else if (whaleHolders > 1) { score += 5; reasons.push(`${whaleHolders} wallets each hold over 3.5% of supply`); }
+
   if (holderCount > 0 && holderCount < 10) { score += 15; reasons.push('Very few holders — low distribution'); }
   else if (holderCount > 0 && holderCount < 50) { score += 8; reasons.push('Low holder count — limited distribution'); }
   if (tokenAge !== null && tokenAge < 3600) { score += 5; reasons.push('Token is less than 1 hour old'); }
@@ -393,6 +405,7 @@ router.get('/scan/:address', async (req, res, next) => {
 
     const { score: riskScore, reasons } = calcRiskScore({
       mintRenounced, freezeRenounced, devHoldingPct, topHolderPct,
+      top10Combined, whaleHolders,
       holderCount: realHolderCount, tokenAge,
       rugHistory, washPct: washTrading?.washPct || 0,
     });
@@ -409,6 +422,8 @@ router.get('/scan/:address', async (req, res, next) => {
         devHoldingPct: parseFloat(devHoldingPct.toFixed(2)),
         devDetail: devHoldingPct === 0 ? 'Dev wallet not detected in top holders.' : devHoldingPct > 10 ? `Dev holds ${devHoldingPct.toFixed(2)}% — high dump risk.` : `Dev holds ${devHoldingPct.toFixed(2)}% — acceptable range.`,
         topHolderPct: parseFloat(topHolderPct.toFixed(2)),
+        top10Combined,
+        whaleHolders,
         isGraduated,
         lpDetail: isGraduated ? 'Graduated to AMM. Trading on Raydium/PumpSwap.' : `${bondingProgress.toFixed(1)}% through the bonding curve. ${(85 - solRaisedNum).toFixed(1)} SOL to graduation.`,
       },

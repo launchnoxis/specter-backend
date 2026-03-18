@@ -377,6 +377,10 @@ router.get('/scan/:address', async (req, res, next) => {
     const devHoldingPct = devHolder ? devHolder.pct : 0;
     const topHolderPct = holders[0]?.pct || 0;
 
+    // Top 10 combined and whale detection
+    const top10Combined = parseFloat(holders.reduce((sum, h) => sum + h.pct, 0).toFixed(2));
+    const whaleHolders = holders.filter(h => h.address !== creator && h.pct > 3.5).length;
+
     // Graduation — check dex
     const isGraduated = dexData?.dexId === 'raydium' ||
       (dexData && dexData.dexId !== 'pump.fun') ||

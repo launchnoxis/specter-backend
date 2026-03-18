@@ -484,3 +484,72 @@ router.get('/debug/:address', async (req, res) => {
 
 router.get('/scans-left', (req, res) => res.json({ scansLeft: 5 }));
 module.exports = router;
+
+// ─── Real-time live tokens via PumpPortal WebSocket ──────────────────────────
+const WebSocket = require('ws');
+
+let liveTokens = [];
+let wsConnected = false;
+
+function connectPumpPortalWS() {
+  try {
+    const ws = new WebSocket('wss://pumpportal.fun/api/data');
+    ws.on('open', () => {
+      console.log('[live] Connected to PumpPortal WS');
+      wsConnected = true;
+      ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+    });
+    ws.on('message', (data) => {
+      try {
+        const token = JSON.parse(data.toString());
+        if (token.mint && token.name) {
+          liveTokens.unshift({
+            name: token.name,
+            symbol: token.symbol || '?',
+            mint: token.mint,
+            marketCap: token.marketCapSol ? `${parseFloat(token.marketCapSol).toFixed(1)} SOL` : '—',
+            time: Date.now(),
+          });
+          if (liveTokens.length > 50) liveTokens = liveTokens.slice(0, 50);
+        }
+      } catch {}
+    });
+    ws.on('close', () => {
+      wsConnected = false;
+      console.log('[live] WS disconnected, reconnecting in 5s...');
+      setTimeout(connectPumpPortalWS, 5000);
+    });
+    ws.on('error', (e) => {
+      console.warn('[live] WS error:', e.message);
+      ws.terminate();
+    });
+  } catch(e) {
+    console.warn('[live] WS connect failed:', e.message);
+    setTimeout(connectPumpPortalWS, 5000);
+  }
+}
+
+// Start the WS connection
+connectPumpPortalWS();
+
+// SSE endpoint — frontend connects and receives live token stream
+router.get('/live', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  // Send current batch immediately
+  const send = () => {
+    if (liveTokens.length > 0) {
+      res.write(`data: ${JSON.stringify(liveTokens.slice(0, 20))}\n\n`);
+    }
+  };
+  send();
+
+  // Push updates every 3 seconds
+  const interval = setInterval(send, 3000);
+
+  req.on('close', () => clearInterval(interval));
+});

@@ -109,69 +109,57 @@ async function getMarketData(address) {
 }
 
 // ─── Feature 1: Creator Rug History (FREE) ───────────────────────────────────
-// Uses Helius to find all token mints the creator initialized
+// Uses Helius searchAssets to find tokens WHERE this wallet is the authority
 async function getCreatorHistory(creator) {
   if (!creator || !HELIUS_KEY) return null;
   try {
-    const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
-
-    // Get parsed transactions for creator — look for INIT_MINT type
-    const r = await axios.get(
-      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100`,
+    // searchAssets finds all tokens created/owned by this wallet as authority
+    const r = await axios.post(
+      `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`,
+      {
+        jsonrpc: '2.0', id: 1,
+        method: 'searchAssets',
+        params: {
+          authorityAddress: creator,
+          tokenType: 'fungible',
+          page: 1,
+          limit: 50,
+        }
+      },
       { timeout: 10000 }
     );
-    const txns = Array.isArray(r.data) ? r.data : [];
 
-    // Keep transactions involving pump.fun program where creator sent SOL (token creation)
-    const pumpCreates = txns.filter(t =>
-      (t.instructions?.some(i => i.programId === PUMP_PROGRAM) ||
-       t.accountData?.some(a => a.account === PUMP_PROGRAM)) &&
-      t.tokenTransfers?.length > 0
-    );
+    const assets = r.data?.result?.items || [];
+    console.log(`[rugHistory] Found ${assets.length} assets for creator ${creator}`);
 
-    if (pumpCreates.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
+    if (assets.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
 
-    const now = Date.now() / 1000;
+    // Check each token on DexScreener to see if it's alive
     let survived = 0, rugged = 0;
-    const tokens = await Promise.all(pumpCreates.slice(0, 10).map(async t => {
-      // Find the mint address from token transfers
-      const mintAddress = t.tokenTransfers?.[0]?.mint || null;
-      const createdAt = t.timestamp || now;
-      const ageSeconds = now - createdAt;
+    const tokens = await Promise.all(assets.slice(0, 10).map(async asset => {
+      const mintAddress = asset.id;
+      const tokenName = asset.content?.metadata?.name || 'Unknown';
+      const tokenSymbol = asset.content?.metadata?.symbol || '?';
+      let isAlive = false;
 
-      // Check if token still has holders (is alive)
-      let isAlive = ageSeconds < 7 * 86400; // default: alive if < 7 days old
-      let tokenName = 'Unknown';
-
-      if (mintAddress) {
-        try {
-          const dexR = await axios.get(
-            `https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`,
-            { timeout: 5000 }
-          );
-          const pair = dexR.data?.pairs?.[0];
-          if (pair) {
-            tokenName = pair.baseToken?.name || 'Unknown';
-            // Has recent volume = alive
-            const vol24h = parseFloat(pair.volume?.h24 || 0);
-            isAlive = vol24h > 0;
-          } else {
-            // No pair on dex = likely dead
-            isAlive = ageSeconds < 86400; // only alive if less than 1 day old
-          }
-        } catch {}
-      }
+      try {
+        const dexR = await axios.get(
+          `https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`,
+          { timeout: 5000 }
+        );
+        const pair = dexR.data?.pairs?.[0];
+        if (pair) {
+          const vol24h = parseFloat(pair.volume?.h24 || 0);
+          const age = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 1000 : 999999;
+          isAlive = vol24h > 0 || age < 3600; // has volume OR less than 1h old
+        }
+      } catch {}
 
       if (isAlive) survived++; else rugged++;
-      return {
-        name: tokenName,
-        mint: mintAddress,
-        alive: isAlive,
-        age: timeAgo(createdAt),
-      };
+      return { name: tokenName, symbol: tokenSymbol, mint: mintAddress, alive: isAlive };
     }));
 
-    return { total: pumpCreates.length, survived, rugged, tokens };
+    return { total: assets.length, survived, rugged, tokens };
   } catch(e) {
     console.warn('[rugHistory]', e.message);
     return null;

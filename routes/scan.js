@@ -336,9 +336,6 @@ router.get('/scan/:address', async (req, res, next) => {
     const solRaisedNum = isGraduated ? 85 : Math.min(liquidityQuote, 85);
     const bondingProgress = isGraduated ? 100 : parseFloat(((solRaisedNum / 85) * 100).toFixed(1));
 
-    // Holder count — use on-chain count, fallback to dex
-    const realHolderCount = onChainHolderCount || dexData?.info?.holder || holders.length;
-
     // Market cap
     let marketCapK = '—';
     if (dexData?.marketCap) {
@@ -353,6 +350,9 @@ router.get('/scan/:address', async (req, res, next) => {
       getWashTrading(address),
       getRealHolderCount(address),
     ]);
+
+    // Holder count — use on-chain count, fallback to dex
+    const realHolderCount = onChainHolderCount || dexData?.info?.holder || holders.length;
 
     const { score: riskScore, reasons } = calcRiskScore({
       mintRenounced, freezeRenounced, devHoldingPct, topHolderPct,

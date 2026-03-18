@@ -226,6 +226,54 @@ async function getWashTrading(address) {
   } catch(e) { console.warn('[washTrading]', e.message); return null; }
 }
 
+
+// ─── Get creator from token's first transaction ───────────────────────────────
+async function getTokenCreator(mintPubkey) {
+  try {
+    // Get the oldest signature for this mint address
+    const sigs = await connection.getSignaturesForAddress(mintPubkey, { limit: 1000 });
+    if (!sigs.length) return null;
+    // The last signature is the earliest (creation tx)
+    const firstSig = sigs[sigs.length - 1].signature;
+    const tx = await connection.getParsedTransaction(firstSig, { maxSupportedTransactionVersion: 0 });
+    // The fee payer of the creation transaction is the creator
+    const creator = tx?.transaction?.message?.accountKeys?.[0]?.pubkey?.toBase58()
+      || tx?.transaction?.message?.accountKeys?.[0];
+    if (creator && typeof creator === 'object') return creator.toBase58();
+    return creator || null;
+  } catch(e) {
+    console.warn('[creator]', e.message);
+    return null;
+  }
+}
+
+// ─── Get real holder count via Helius getTokenAccounts ───────────────────────
+async function getRealHolderCount(address) {
+  if (!HELIUS_KEY) return 0;
+  try {
+    // Use cursor pagination to count all holders
+    let total = 0;
+    let cursor = null;
+    for (let page = 1; page <= 5; page++) {
+      const params = { mint: address, limit: 1000 };
+      if (cursor) params.cursor = cursor;
+      const r = await axios.post(
+        `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`,
+        { jsonrpc: '2.0', id: page, method: 'getTokenAccounts', params },
+        { timeout: 10000 }
+      );
+      const accounts = r.data?.result?.token_accounts || [];
+      total += accounts.filter(a => parseInt(a.amount) > 0).length;
+      cursor = r.data?.result?.cursor;
+      if (!cursor || accounts.length < 1000) break;
+    }
+    return total;
+  } catch(e) {
+    console.warn('[holderCount]', e.message);
+    return 0;
+  }
+}
+
 // ─── Main scan ────────────────────────────────────────────────────────────────
 router.get('/scan/:address', async (req, res, next) => {
   try {
@@ -260,8 +308,12 @@ router.get('/scan/:address', async (req, res, next) => {
     const symbol = dexData?.baseToken?.symbol || metaData.symbol || '???';
     const image = dexData?.info?.imageUrl || metaData.image || null;
 
-    // Creator
-    const creator = metaData.creator || null;
+    // Creator — get from on-chain if metadata didn't have it
+    let creator = metaData.creator || null;
+    if (!creator) {
+      creator = await getTokenCreator(mintPubkey);
+      console.log('[scan] Creator from tx history:', creator);
+    }
 
     // Creation time
     const createdTs = dexData?.pairCreatedAt ? dexData.pairCreatedAt / 1000 : null;
@@ -284,8 +336,8 @@ router.get('/scan/:address', async (req, res, next) => {
     const solRaisedNum = isGraduated ? 85 : Math.min(liquidityQuote, 85);
     const bondingProgress = isGraduated ? 100 : parseFloat(((solRaisedNum / 85) * 100).toFixed(1));
 
-    // Holder count
-    const realHolderCount = dexData?.info?.holder || 0;
+    // Holder count — use on-chain count, fallback to dex
+    const realHolderCount = onChainHolderCount || dexData?.info?.holder || holders.length;
 
     // Market cap
     let marketCapK = '—';
@@ -294,16 +346,17 @@ router.get('/scan/:address', async (req, res, next) => {
       marketCapK = mc >= 1_000_000 ? `$${(mc/1_000_000).toFixed(2)}M` : mc >= 1000 ? `$${(mc/1000).toFixed(1)}K` : `$${mc.toFixed(0)}`;
     }
 
-    // Three features in parallel
-    const [rugHistory, sellPressure, washTrading] = await Promise.all([
+    // Three features + holder count in parallel
+    const [rugHistory, sellPressure, washTrading, onChainHolderCount] = await Promise.all([
       getCreatorHistory(creator),
       getSellPressure(address),
       getWashTrading(address),
+      getRealHolderCount(address),
     ]);
 
     const { score: riskScore, reasons } = calcRiskScore({
       mintRenounced, freezeRenounced, devHoldingPct, topHolderPct,
-      holderCount: realHolderCount || holders.length, tokenAge,
+      holderCount: realHolderCount, tokenAge,
       rugHistory, washPct: washTrading?.washPct || 0,
     });
 
@@ -331,7 +384,7 @@ router.get('/scan/:address', async (req, res, next) => {
       stats: {
         marketCapK,
         age: createdTs ? timeAgo(createdTs) : '—',
-        holders: realHolderCount || holders.length,
+        holders: realHolderCount,
         solRaised: isGraduated ? '85+ (Graduated)' : `${solRaisedNum.toFixed(2)} SOL`,
       },
       rugHistory,

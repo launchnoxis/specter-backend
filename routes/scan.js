@@ -266,15 +266,33 @@ router.get('/scan/:address', async (req, res, next) => {
     } catch {}
 
     // 4. Bonding curve progress
+    // If pumpData.complete is true, token has graduated — show 100%
+    const isGraduated = pumpData?.complete === true || pumpData?.raydium_pool != null;
     const GRADUATION_SOL = 85_000_000_000;
     let bondingProgress = 0;
-    if (pumpData?.real_sol_reserves) {
+    let solRaisedNum = 0;
+
+    if (isGraduated) {
+      bondingProgress = 100;
+      solRaisedNum = 85; // graduated means 85+ SOL was raised
+    } else if (pumpData?.real_sol_reserves && pumpData.real_sol_reserves > 0) {
       bondingProgress = Math.min((pumpData.real_sol_reserves / GRADUATION_SOL) * 100, 100);
+      solRaisedNum = pumpData.real_sol_reserves / 1_000_000_000;
     } else if (pumpData?.virtual_sol_reserves) {
+      // virtual starts at 30 SOL, ends at ~115 SOL
       const virtualStart = 30_000_000_000;
       const virtualEnd = 115_000_000_000;
       bondingProgress = Math.max(0, Math.min(((pumpData.virtual_sol_reserves - virtualStart) / (virtualEnd - virtualStart)) * 100, 100));
+      // Estimate real SOL from virtual
+      solRaisedNum = Math.max(0, (pumpData.virtual_sol_reserves - virtualStart) / 1_000_000_000);
     }
+
+    // Token age — try multiple fields
+    const createdTs = pumpData?.created_timestamp || pumpData?.creation_time || null;
+    const tokenAge = createdTs ? Math.floor(Date.now()/1000) - createdTs : null;
+
+    // Real holder count from DexScreener or pump.fun
+    const realHolderCount = pumpData?.holder_count || pumpData?.holders || dexData?.info?.holder || holders.length;
 
     // 5. Core checks
     const mintRenounced = !mintData?.mintAuthority;
@@ -283,7 +301,6 @@ router.get('/scan/:address', async (req, res, next) => {
     const devHolder = creator ? holders.find(h => h.address === creator) : null;
     const devHoldingPct = devHolder ? devHolder.pct : 0;
     const topHolderPct = holders[0]?.pct || 0;
-    const tokenAge = pumpData?.created_timestamp ? Math.floor(Date.now()/1000) - pumpData.created_timestamp : null;
 
     // 6. Run the three new features in parallel
     const [rugHistory, sellPressure, washTrading] = await Promise.all([
@@ -332,20 +349,24 @@ router.get('/scan/:address', async (req, res, next) => {
           ? `Dev holds ${devHoldingPct.toFixed(2)}% — a large position that could crash the price if sold.`
           : `Dev holds ${devHoldingPct.toFixed(2)}% — within an acceptable range.`,
         topHolderPct: parseFloat(topHolderPct.toFixed(2)),
-        lpDetail: bondingProgress < 100
-          ? `Token is on the pump.fun bonding curve (${bondingProgress.toFixed(1)}% complete). LP is not applicable until graduation.`
-          : 'Token has graduated to PumpSwap AMM. Check LP lock status separately.',
+        isGraduated,
+        lpDetail: isGraduated
+          ? 'Token has graduated to PumpSwap AMM. LP is now in the PumpSwap liquidity pool.'
+          : bondingProgress > 0
+          ? `${bondingProgress.toFixed(1)}% through the bonding curve. ${(85 - solRaisedNum).toFixed(1)} SOL needed to graduate.`
+          : 'Token is on the pump.fun bonding curve. No trading activity yet.',
       },
       holders,
       bondingCurve: {
         progress: parseFloat(bondingProgress.toFixed(1)),
-        solRaised: pumpData?.real_sol_reserves ? (pumpData.real_sol_reserves / 1_000_000_000).toFixed(2) : '0',
+        solRaised: solRaisedNum.toFixed(2),
+        isGraduated,
       },
       stats: {
         marketCapK,
-        age: tokenAge !== null ? timeAgo(pumpData.created_timestamp) : '—',
-        holders: holders.length,
-        solRaised: pumpData?.real_sol_reserves ? (pumpData.real_sol_reserves / 1_000_000_000).toFixed(2) : '0',
+        age: tokenAge !== null ? timeAgo(createdTs) : '—',
+        holders: realHolderCount,
+        solRaised: isGraduated ? '85+ (Graduated)' : solRaisedNum.toFixed(2),
       },
       // The three unique features
       rugHistory,       // FREE

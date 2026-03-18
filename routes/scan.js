@@ -109,36 +109,72 @@ async function getMarketData(address) {
 }
 
 // ─── Feature 1: Creator Rug History (FREE) ───────────────────────────────────
+// Uses Helius to find all token mints the creator initialized
 async function getCreatorHistory(creator) {
   if (!creator || !HELIUS_KEY) return null;
   try {
+    const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+
+    // Get parsed transactions for creator — look for INIT_MINT type
     const r = await axios.get(
-      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100`,
+      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100&type=INIT_MINT`,
       { timeout: 10000 }
     );
     const txns = Array.isArray(r.data) ? r.data : [];
 
-    // Find pump.fun token creates — they have the pump program in accounts
-    const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
-    const creates = txns.filter(t =>
-      t.type === 'CREATE' ||
-      t.accountData?.some(a => a.account === PUMP_PROGRAM) ||
-      t.instructions?.some(i => i.programId === PUMP_PROGRAM && i.data)
+    // Only keep transactions involving pump.fun program
+    const pumpCreates = txns.filter(t =>
+      t.instructions?.some(i => i.programId === PUMP_PROGRAM) ||
+      t.accountData?.some(a => a.account === PUMP_PROGRAM)
     );
 
-    if (creates.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
+    if (pumpCreates.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
 
     const now = Date.now() / 1000;
     let survived = 0, rugged = 0;
-    const tokens = creates.slice(0, 10).map(t => {
-      const age = now - (t.timestamp || now);
-      const isAlive = age < 7 * 86400;
-      if (isAlive) survived++; else rugged++;
-      return { name: t.description?.split(' ')?.[0] || 'Token', alive: isAlive, age: timeAgo(t.timestamp || now) };
-    });
+    const tokens = await Promise.all(pumpCreates.slice(0, 10).map(async t => {
+      // Find the mint address from token transfers
+      const mintAddress = t.tokenTransfers?.[0]?.mint || null;
+      const createdAt = t.timestamp || now;
+      const ageSeconds = now - createdAt;
 
-    return { total: creates.length, survived, rugged, tokens };
-  } catch(e) { console.warn('[rugHistory]', e.message); return null; }
+      // Check if token still has holders (is alive)
+      let isAlive = ageSeconds < 7 * 86400; // default: alive if < 7 days old
+      let tokenName = 'Unknown';
+
+      if (mintAddress) {
+        try {
+          const dexR = await axios.get(
+            `https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`,
+            { timeout: 5000 }
+          );
+          const pair = dexR.data?.pairs?.[0];
+          if (pair) {
+            tokenName = pair.baseToken?.name || 'Unknown';
+            // Has recent volume = alive
+            const vol24h = parseFloat(pair.volume?.h24 || 0);
+            isAlive = vol24h > 0;
+          } else {
+            // No pair on dex = likely dead
+            isAlive = ageSeconds < 86400; // only alive if less than 1 day old
+          }
+        } catch {}
+      }
+
+      if (isAlive) survived++; else rugged++;
+      return {
+        name: tokenName,
+        mint: mintAddress,
+        alive: isAlive,
+        age: timeAgo(createdAt),
+      };
+    }));
+
+    return { total: pumpCreates.length, survived, rugged, tokens };
+  } catch(e) {
+    console.warn('[rugHistory]', e.message);
+    return null;
+  }
 }
 
 // ─── Feature 2: Sell Pressure Index (FREE) ───────────────────────────────────

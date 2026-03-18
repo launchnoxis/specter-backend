@@ -486,13 +486,16 @@ router.get('/scans-left', (req, res) => res.json({ scansLeft: 5 }));
 module.exports = router;
 
 // ─── Real-time live tokens via PumpPortal WebSocket ──────────────────────────
-const WebSocket = require('ws');
-
 let liveTokens = [];
 let wsConnected = false;
 
 function connectPumpPortalWS() {
   try {
+    let WebSocket;
+    try { WebSocket = require('ws'); } catch(e) {
+      console.warn('[live] ws package not available, skipping live feed');
+      return;
+    }
     const ws = new WebSocket('wss://pumpportal.fun/api/data');
     ws.on('open', () => {
       console.log('[live] Connected to PumpPortal WS');
@@ -516,12 +519,11 @@ function connectPumpPortalWS() {
     });
     ws.on('close', () => {
       wsConnected = false;
-      console.log('[live] WS disconnected, reconnecting in 5s...');
       setTimeout(connectPumpPortalWS, 5000);
     });
     ws.on('error', (e) => {
       console.warn('[live] WS error:', e.message);
-      ws.terminate();
+      try { ws.terminate(); } catch {}
     });
   } catch(e) {
     console.warn('[live] WS connect failed:', e.message);
@@ -529,8 +531,8 @@ function connectPumpPortalWS() {
   }
 }
 
-// Start the WS connection
-connectPumpPortalWS();
+// Start after 2s delay to let server boot first
+setTimeout(connectPumpPortalWS, 2000);
 
 // SSE endpoint — frontend connects and receives live token stream
 router.get('/live', (req, res) => {

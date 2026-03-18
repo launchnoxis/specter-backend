@@ -117,15 +117,16 @@ async function getCreatorHistory(creator) {
 
     // Get parsed transactions for creator — look for INIT_MINT type
     const r = await axios.get(
-      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100&type=INIT_MINT`,
+      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100`,
       { timeout: 10000 }
     );
     const txns = Array.isArray(r.data) ? r.data : [];
 
-    // Only keep transactions involving pump.fun program
+    // Keep transactions involving pump.fun program where creator sent SOL (token creation)
     const pumpCreates = txns.filter(t =>
-      t.instructions?.some(i => i.programId === PUMP_PROGRAM) ||
-      t.accountData?.some(a => a.account === PUMP_PROGRAM)
+      (t.instructions?.some(i => i.programId === PUMP_PROGRAM) ||
+       t.accountData?.some(a => a.account === PUMP_PROGRAM)) &&
+      t.tokenTransfers?.length > 0
     );
 
     if (pumpCreates.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };

@@ -109,57 +109,69 @@ async function getMarketData(address) {
 }
 
 // ─── Feature 1: Creator Rug History (FREE) ───────────────────────────────────
-// Uses Helius searchAssets to find tokens WHERE this wallet is the authority
+// Gets all pump.fun tokens created by this wallet
+// Strategy: get creator's transactions, find ones involving pump.fun where
+// creator RECEIVED tokens (initial dev buy = token creation event)
 async function getCreatorHistory(creator) {
   if (!creator || !HELIUS_KEY) return null;
   try {
-    // searchAssets finds all tokens created/owned by this wallet as authority
-    const r = await axios.post(
-      `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`,
-      {
-        jsonrpc: '2.0', id: 1,
-        method: 'searchAssets',
-        params: {
-          authorityAddress: creator,
-          tokenType: 'fungible',
-          page: 1,
-          limit: 50,
-        }
-      },
+    const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+
+    const r = await axios.get(
+      `https://api.helius.xyz/v0/addresses/${creator}/transactions?api-key=${HELIUS_KEY}&limit=100`,
       { timeout: 10000 }
     );
+    const txns = Array.isArray(r.data) ? r.data : [];
 
-    const assets = r.data?.result?.items || [];
-    console.log(`[rugHistory] Found ${assets.length} assets for creator ${creator}`);
+    // Find transactions where pump.fun program is involved AND creator received tokens
+    // This is the signature of a token creation (dev buy at launch)
+    const pumpTxns = txns.filter(t =>
+      t.accountData?.some(a => a.account === PUMP_PROGRAM) ||
+      t.instructions?.some(i => i.programId === PUMP_PROGRAM)
+    );
 
-    if (assets.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
+    // Deduplicate by mint — each unique mint received by creator = one token launched
+    const mintsSeen = new Set();
+    const creates = [];
+    for (const t of pumpTxns) {
+      const received = t.tokenTransfers?.filter(tr =>
+        tr.toUserAccount === creator && !mintsSeen.has(tr.mint)
+      ) || [];
+      for (const tr of received) {
+        mintsSeen.add(tr.mint);
+        creates.push({ mint: tr.mint, timestamp: t.timestamp });
+      }
+    }
 
-    // Check each token on DexScreener to see if it's alive
+    console.log(`[rugHistory] Found ${creates.length} unique tokens for creator ${creator}`);
+    if (creates.length === 0) return { total: 0, survived: 0, rugged: 0, tokens: [] };
+
+    // Check each on DexScreener
     let survived = 0, rugged = 0;
-    const tokens = await Promise.all(assets.slice(0, 10).map(async asset => {
-      const mintAddress = asset.id;
-      const tokenName = asset.content?.metadata?.name || 'Unknown';
-      const tokenSymbol = asset.content?.metadata?.symbol || '?';
-      let isAlive = false;
-
+    const tokens = await Promise.all(creates.slice(0, 10).map(async c => {
+      let tokenName = 'Unknown', tokenSymbol = '?', isAlive = false;
       try {
         const dexR = await axios.get(
-          `https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`,
+          `https://api.dexscreener.com/latest/dex/tokens/${c.mint}`,
           { timeout: 5000 }
         );
         const pair = dexR.data?.pairs?.[0];
         if (pair) {
+          tokenName = pair.baseToken?.name || 'Unknown';
+          tokenSymbol = pair.baseToken?.symbol || '?';
           const vol24h = parseFloat(pair.volume?.h24 || 0);
-          const age = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 1000 : 999999;
-          isAlive = vol24h > 0 || age < 3600; // has volume OR less than 1h old
+          const ageMs = pair.pairCreatedAt ? Date.now() - pair.pairCreatedAt : 999999000;
+          isAlive = vol24h > 0 || ageMs < 3600000;
+        } else {
+          // Not on any DEX = dead token
+          isAlive = false;
         }
       } catch {}
-
       if (isAlive) survived++; else rugged++;
-      return { name: tokenName, symbol: tokenSymbol, mint: mintAddress, alive: isAlive };
+      return { name: tokenName, symbol: tokenSymbol, mint: c.mint, alive: isAlive, age: timeAgo(c.timestamp) };
     }));
 
-    return { total: assets.length, survived, rugged, tokens };
+    return { total: creates.length, survived, rugged, tokens };
   } catch(e) {
     console.warn('[rugHistory]', e.message);
     return null;

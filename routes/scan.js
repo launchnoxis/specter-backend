@@ -116,6 +116,16 @@ router.get('/scan/:address', async (req, res, next) => {
     const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
     const mintData = mintInfo.value?.data?.parsed?.info;
 
+    // Known LP/program addresses to exclude from holder analysis
+    const EXCLUDED_ADDRESSES = new Set([
+      'TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM', // pump.fun authority
+      '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', // pump.fun program
+      'CebN5WGQ4jvEPvsVU4EoHEpgznyQHearzZAXmDGFMKca', // pump.fun fee
+      '11111111111111111111111111111111',              // system program
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // token program
+      'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bwf', // associated token program
+    ]);
+
     // 3. Holders
     let holders = [];
     let totalSupply = 1_000_000_000_000_000;
@@ -123,8 +133,8 @@ router.get('/scan/:address', async (req, res, next) => {
       const largestAccounts = await connection.getTokenLargestAccounts(mintPubkey);
       if (mintData?.supply) totalSupply = parseInt(mintData.supply);
 
-      holders = await Promise.all(
-        largestAccounts.value.slice(0, 10).map(async (acc) => {
+      holders = (await Promise.all(
+        largestAccounts.value.slice(0, 20).map(async (acc) => {
           let owner = acc.address.toBase58();
           try {
             const info = await connection.getParsedAccountInfo(acc.address);
@@ -136,7 +146,7 @@ router.get('/scan/:address', async (req, res, next) => {
             amount: acc.uiAmountString,
           };
         })
-      );
+      )).filter(h => !EXCLUDED_ADDRESSES.has(h.address)).slice(0, 10);
     } catch {}
 
     // 4. Bonding curve progress
